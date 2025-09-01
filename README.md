@@ -1,3 +1,10 @@
+# Visualizing IRT through RMarkdown output
+You can run the RMarkdown file directly on your computer and find an output like this:
+
+<img width="1954" height="995" alt="Screenshot 2025-09-01 at 7 57 22 PM" src="https://github.com/user-attachments/assets/2fa1a17a-1e43-47da-a90e-7eb9486198ba" />
+
+
+
 # Visualizing IRT through R Shiny
 To run the codes on your local computer and upload to a Shinyapps.io website, first create your account here: https://www.shinyapps.io/.
 
