@@ -1,5 +1,5 @@
 # Visualizing IRT through R Shiny
-To run the codes on your local computer and upload to a Shinyapps.io website, first create your account here: https://www.shinyapps.io/
+To run the codes on your local computer and upload to a Shinyapps.io website, first create your account here: https://www.shinyapps.io/.
 
 Create a folder (e.g., 'Visualizing IRT_2025) that contains the R files (global.R, server.R, and ui.R).
 
