@@ -1,0 +1,439 @@
+---
+title: "Visualizing IRT"
+author: "Ha Bui"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Set up scenario
+```{r}
+library(shiny)
+library(shinyjs)
+library(ggplot2)
+library(tidyr)
+library(scales)
+
+# Labels for items
+item_names <- paste0("Item_", 1:5)
+item_text <- c(
+  "I feel more energized after exercising.",
+  "I make time to exercise even when I'm busy.",
+  "I enjoy exercising in my free time.",
+  "I feel guilty when I skip a workout.",
+  "Exercising is one of my top priorities."
+)
+
+# Default parameters
+a_default <- rep(1.0, 5)
+b_default <- seq(-2, 2, length.out = 5)  # base difficulty for each item
+c_default <- rep(0.2, 5)
+
+# Define UM palette
+um_colors <- c("maize" = "#FFCB05", 
+               "blue" = "#00274C",
+               "red" = "#9A3324",
+               "orange"= "#D86018",
+               "teal" = "#00B2A9",
+               "purple" = "#702082", 
+               "ash" = "#989C97",
+               "stone" = "#655A52")  
+```
+
+### Set up user interface 
+```{r}
+ui <- fluidPage(
+  useShinyjs(),
+  
+  # Customize styles
+  tags$head(
+    tags$style(HTML("
+                    .info-toggle-btn {
+        background-color: #fce303;
+        border: 2px solid #f39c12;
+        color: #333333;
+        font-style: italic;
+        font-weight: bold;
+        border-radius: 8px;
+        padding: 6px 12px;
+        margin-top: 10px;
+        margin-bottom: 5px;
+        cursor: pointer;
+      }
+      .info-toggle-btn:hover {
+        background-color: #ffe066;
+      }"))
+  ),
+  
+  titlePanel("Interactive IRT App: Motivation to Exercise"),
+  
+  
+  tabsetPanel(
+    
+    # Create a scenario tab
+    tabPanel("Scenario",
+      br(),
+      h4("Scenario: Predicting Exercise Behavior"),
+      p("You surveyed 500 students about their motivation to exercise. Each item is a statement (e.g.,"),
+      tags$em('"I feel more energized after exercising."'), 
+      p("Participants responded with 4 options: 1 = Totally disagree, 2 = Somewhat disagree, 3 = Somewhat agree, and 4 = Totally agree."),
+      p("We will explore how item response theory (IRT) can model and visualize the data."),
+      br(),
+      h5("Below are the five items in the survey:"),
+      tags$ol(
+        lapply(item_text, tags$li)
+      )
+    ),
+    
+    # Create an ICC tab
+    tabPanel("Item Characteristic Curves (ICC)",
+             actionButton("toggle_icc", "What is this?", class = "info-toggle-btn"),
+             hidden(
+               div(id = "icc_info",
+                   tags$ul(
+                     tags$li("ICCs show how the probability of endorsing an item/getting an item correct changes with theta (levels of ability/motivation)."),
+                     tags$li("Each curve represents one item. Steeper curves show greater discrimination (a) or how an item better differentiates between individuals given a certain theta value."),
+                     tags$hr()
+                   )
+             )
+            ),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("model", "IRT Model", c("1PL (Rasch)", "2PL", "3PL")),
+      sliderInput("b_shift", "Ability (θ)",  -4, 4, 0, 0.1),
+      checkboxGroupInput("items", "Select Items", choices = item_names, selected = item_names),
+       
+      # Option to show the discrimination (a) slider only in 2PL or 3PL
+      conditionalPanel(
+        condition = "input.model != '1PL (Rasch)'",
+        h5("Discrimination (a)"),
+        lapply(1:5, function(i){
+          sliderInput(paste0("a", i), paste0("a", i, " (", item_names[i], ")"),
+                      min = 0.2, max = 3, value = 1, step = 0.05)
+        })
+  ),
+  
+        # Option to show the guessing (c) slider only in 3PL
+      conditionalPanel(
+        condition = "input.model == '3PL'",
+        sliderInput("c_slider", "Guessing (c)", min = 0, max = 0.5, value = 0.2, step = 0.01)
+      ),
+  
+      checkboxInput("show_params", "Show item parameters on plot", value = TRUE)
+    ),
+  mainPanel(plotOutput("icc_plot", height = "600px"))
+      )
+    ),
+    
+    # Create a TCC tab
+    tabPanel("Test Characteristic Curve (TCC)",
+             actionButton("toggle_tcc", "What is this?", , class = "info-toggle-btn"),
+             hidden(
+               div(id = "tcc_info",
+                   tags$ul(
+                     tags$li("TCC shows the summation of all ICC values, helping us understand how the overall test looks like across different ability levels."),
+                     tags$hr()
+                   )
+             )
+            ),
+      plotOutput("tcc_plot", height = "500px")
+    ),
+    
+    # Create an IIC tab
+    tabPanel("Item Information Curves (IIC)",
+             actionButton("toggle_iic", "What is this?", class = "info-toggle-btn"),
+             hidden(
+               div(id = "iic_info",
+                   tags$ul(
+                     tags$li("IICs show how much information (precision) a single item provides at each ability level."),
+                     tags$li("A higher peak means the item is more useful/provides more information at that range of ability."),
+                     tags$hr()
+                   )
+             )
+            ),
+      plotOutput("iic_plot", height = "500px")
+    ),
+    
+    # Create a TIC tab
+    tabPanel("Test Information Curve (TIC) & Standard Error (SE) Distribution",
+             actionButton("toggle_tic", "What is this?", , class = "info-toggle-btn"),
+             hidden(
+               div(id = "tic_info",
+                   tags$ul(
+                     tags$li("TIC combines information from all items to show how precisely the entire test measures at different levels of ability."),
+                     tags$li("SE is the inverse of information: higher information means lower error."),
+                     tags$hr()
+                   )
+             )
+            ),
+      plotOutput("tif_plot", height = "500px")
+    )
+  )
+)
+```
+
+### Set up server 
+```{r}
+server <- function(input, output, session) {
+  
+  # Define parameters
+  get_a <- reactive({
+    if(input$model == "1PL (Rasch)"){
+      a_default
+    } else {
+      sapply(1:5, function(i) input[[paste0("a", i)]])
+    }
+  })
+  
+  get_c <- reactive({
+    if(input$model=="3PL") rep(input$c_slider,5) else rep(0,5)
+  })
+  
+  # Shifted b values
+  get_b <- reactive({
+    b_default + input$b_shift
+  })
+  
+  # P(theta) for each item
+  p_mat <- reactive({
+    th <- seq(-4,4,length.out=401)
+    a <- get_a()
+    b <- get_b()
+    c <- get_c()
+    sapply(1:5, function(j){
+      if(input$model == "1PL (Rasch)"){
+        1/(1 + exp(-(th - b[j])))
+      } else if(input$model == "2PL"){
+        1/(1 + exp(-a[j]*(th - b[j])))
+      } else { # 3PL
+        c[j] + (1 - c[j]) / (1 + exp(-a[j]*(th - b[j])))
+      }
+    })
+  })
+  
+  # Item Information
+  info_mat <- reactive({
+    th <- theta_grid()
+    a <- get_a()
+    b <- get_b()
+    c <- get_c()
+    
+    # Compute P(theta) for all items
+    P <- sapply(1:5, function(j){
+    if(input$model == "1PL (Rasch)") {
+      1 / (1 + exp(-(th - b[j])))
+    } else if(input$model == "2PL") {
+      1 / (1 + exp(-a[j]*(th - b[j])))
+    } else {  # 3PL
+      c[j] + (1 - c[j]) / (1 + exp(-a[j]*(th - b[j])))
+    }
+  })
+  
+  if(input$model == "1PL (Rasch)") {
+    P * (1 - P)
+  } else if(input$model == "2PL") {
+    sweep(P*(1 - P), 2, a^2, `*`)
+  } else { # 3PL
+    a_matrix <- matrix(a, nrow = nrow(P), ncol = ncol(P), byrow = TRUE)
+    c_matrix <- matrix(c, nrow = nrow(P), ncol = ncol(P), byrow = TRUE)
+    P_star <- (P - c_matrix) / (1 - c_matrix)
+    (a_matrix^2) * P_star * (1 - P_star)
+  }
+})
+    
+  theta_grid <- reactive(seq(-4, 4, length.out = 401))
+  
+  # Configurations for ICCs
+  output$icc_plot <- renderPlot({
+    th <- theta_grid()
+    a <- get_a()
+    b <- get_b()
+    c <- get_c()
+    
+    # Subset based on selected items
+    selected_items <- which(item_names %in% input$items)
+    if(length(selected_items) == 0) return(NULL)  # nothing selected
+        # P <- P[, selected_items, drop = FALSE]
+    plot_items <- item_names[selected_items]
+    
+    # Compute P(theta) for selected items
+    P <- sapply(selected_items, function(j){
+      if(input$model == "1PL (Rasch)") {
+        1 / (1 + exp(-(th - b[j])))
+      } else if(input$model == "2PL") {
+        1 / (1 + exp(-a[j]*(th - b[j])))
+      } else {  # 3PL
+        c[j] + (1 - c[j]) / (1 + exp(-a[j]*(th - b[j])))
+      }
+    })
+    
+    # Create dataframe for plotting 
+    df <- data.frame(theta = rep(th, times = ncol(P)),
+                     prob = as.vector(P),
+                     item = factor(rep(plot_items, each = length(th)), levels = plot_items))
+    
+    # Add parameter labels if selected
+    df_labels <- NULL
+    if(input$show_params){
+      df_labels <- lapply(seq_along(plot_items), function(i){
+        idx <- selected_items[i]
+        # Probability at marker
+        theta_marker <- input$b_shift
+        p_theta <- if(input$model == "3PL") {
+          c[idx] + (1 - c[idx]) / (1 + exp(-a[idx]*(theta_marker - b[idx])))
+        } else if(input$model == "2PL") {
+          1 / (1 + exp(-a[idx]*(theta_marker - b[idx])))
+        } else {  # 1PL
+          1 / (1 + exp(-(theta_marker - b[idx])))
+        }
+        data.frame(
+          theta = theta_marker,
+          prob  = p_theta,
+          label = paste0("a=", round(a[idx],2), ", b=", round(b[idx],2), ", c=", round(c[idx],2)),
+          item  = plot_items[i]
+        )
+      })
+      df_labels <- do.call(rbind, df_labels)
+  }
+    # Only map colors to the selected items
+  selected_colors <- um_colors[match(plot_items, item_names)]
+  names(selected_colors) <- plot_items
+  
+    # Plot ICCs
+    p <- ggplot(df, aes(theta, prob, color = item)) +
+  geom_line(size = 1.2) +
+  geom_vline(xintercept = input$b_shift, linetype = "dashed") +
+  coord_cartesian(ylim = c(0, 1)) +
+  labs(
+    title = paste("Item Characteristic Curves (ICC) -", input$model),
+    x = expression(theta), 
+    y = "Probability of Endorsing Item", 
+    color = "Item"
+  ) +
+  scale_color_manual(values = selected_colors) + 
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    legend.title = element_text(face = "bold"),
+    legend.position = "top"
+  )
+
+if(input$show_params){
+  p <- p + geom_text(
+    data = df_labels,
+    aes(x = theta, y = prob, label = label, color = item),
+    hjust = -0.1, vjust = -0.5, size = 3,
+    show.legend = FALSE
+  )
+}
+
+p})
+  
+  # Configurations for TCC
+  output$tcc_plot <- renderPlot({
+    th <- theta_grid(); P <- p_mat()
+    tcc <- rowSums(P)
+    ggplot(data.frame(theta = th, tcc = tcc), aes(theta, tcc)) +
+      geom_line(size = 1.2, color = um_colors["teal"]) +
+      labs(title = paste("Test Characteristic Curve (TCC) -", input$model),
+           x = expression(theta), 
+           y = "Expected Total Score") +
+      scale_color_manual(values = um_colors) +
+      theme_minimal(base_size = 14) +
+      theme(
+      plot.title = element_text(face = "bold", size = 16),
+      legend.title = element_text(face = "bold"),
+      legend.position = "top"
+    )
+  })
+  
+  # Configurations for IICs
+  output$iic_plot <- renderPlot({
+  th <- theta_grid()
+  Imat <- info_mat()
+  df <- data.frame(
+    theta = rep(th, times = 5),
+    info  = as.vector(Imat),
+    item  = factor(rep(item_names, each = length(th)), levels = item_names)
+  )
+  
+  ggplot(df, aes(x = theta, y = info)) +
+    geom_line(size = 1.2, color = um_colors["blue"]) +
+    geom_vline(xintercept = input$theta_marker, linetype = "dashed", color = um_colors["maize"]) +
+    facet_wrap(~item, ncol = 3, scales = "free_y") +
+    labs(
+      title = paste("Item Information Curves (IIC) -", input$model),
+      x = expression(theta),
+      y = "Item information"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      plot.title = element_text(face = "bold", size = 16),
+      strip.background = element_rect(fill = um_colors["maize"], color = um_colors["blue"], size = 1.5),
+      strip.text = element_text(color = um_colors["blue"], face = "bold", size = 12),
+      panel.border = element_rect(color = um_colors["blue"], fill = NA, size = 1),
+      panel.spacing = unit(0.5, "cm")
+    )
+})
+  
+  # Configurations for TIC & SE
+  output$tif_plot <- renderPlot({
+  th <- theta_grid()
+  Imat <- info_mat()
+  tic <- rowSums(Imat)
+  
+  se <- sqrt(1 / tic)
+  se_scaled <- se * max(tic) / max(se)
+  
+  df <- data.frame(theta = th, TIC = tic, SE = se_scaled)
+  
+  # Positions for line labels
+  label_df <- data.frame(
+    theta = max(th),
+    value = c(tic[length(tic)], se_scaled[length(se_scaled)]),
+    label = c("TIC", "SE"),
+    color = c(um_colors["blue"], um_colors["red"])
+  )
+  
+  ggplot(df, aes(x = theta)) +
+    geom_line(aes(y = TIC, color = um_colors["blue"]), size = 1.3) +
+    geom_line(aes(y = SE, color = um_colors["red"]), size = 1.2, linetype = "dashed") +
+    geom_text(data = label_df, aes(x = theta, y = value, label = label, color = color),
+              hjust = -0.1, vjust = 0.5, fontface = "bold") +
+    labs(
+      title = paste("Test Information Curve & Standard Error Distribution -", input$model),
+      x = expression(theta),
+      y = "Value"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      plot.title = element_text(face = "bold", size = 16),
+      legend.position = "none"  # hide legend
+    ) +
+    xlim(min(th), max(th) + 0.5)  # add extra space for labels
+})
+  
+  # Toggle/set collapsible descriptions for each graph
+  observeEvent(input$toggle_icc, {toggle("icc_info")})
+  observeEvent(input$toggle_tcc, {toggle("tcc_info")})
+  observeEvent(input$toggle_iic, {toggle("iic_info")})
+  observeEvent(input$toggle_tic, {toggle("tic_info")})
+
+}
+```
+
+### Render output
+```{r}
+shinyApp(ui = ui, server = server)
+```
+
+
+
+
+
+
+
+
