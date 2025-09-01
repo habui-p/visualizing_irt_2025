@@ -5,19 +5,18 @@ Create a folder (e.g., 'Visualizing IRT_2025) that contains the R files (global.
 
 Then, create a new R script and type the following: 
 
-`install.packages("rsconnect") 
+```install.packages("rsconnect") 
 
 library(rsconnect)
 
-rsconnect::setAccountInfo(name = 'yourname', 
-
-                            token = 'acquire through your Shinyapps', 
+rsconnect::setAccountInfo(name = 'yourname',
+                          token = 'acquire through your Shinyapps',
+                          secret = 'acquire through your Shinyapps') 
                             
-                            secret = 'acquire through your Shinyapps') 
-                            
-rsconnect::deployApp('your folder path, for example: /Users/habui/Downloads/Visualizing IRT_2025')`
+rsconnect::deployApp('your folder path, for example: /Users/habui/Downloads/Visualizing IRT_2025')
+```
 
-  You will have a Shinyapps website similar to this: https://habui.shinyapps.io/visualizing_irt_2025/
+  You will have a Shinyapps website similar to this: https://habui.shinyapps.io/visualizing_irt_2025/.
 
   # Other samples of IRT visualizations:
   1. https://aidenloe.github.io/irtplots.html
